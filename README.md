@@ -30,7 +30,7 @@ You need a Python environment with the PhenoBIC dependencies. You can use conda:
 
 1. Install [Anaconda](https://www.anaconda.com/).
 
-2. Download `environment.yml`
+2. Download [environment.yml](scripts/environment.yml)
 
 3. In an Anaconda prompt terminal, run this within the directory with the `environment.yml` file to create the PhenoBIC Python environment:
 
@@ -78,7 +78,7 @@ Restart QuPath after installing.
     In the **REQUIRED CONFIG** block at the top, set:
    - `CHANNELS` – list of channel names (must match your image channel names in QuPath). Use **Extensions → PhenoBIC → Run PhenoBIC → Print Channel Names** to print the channel names for the current image.
    - `MODEL_PATH` – full path to your PhenoBIC `.keras` model. Install from [here](https://github.com/your-org/qupath-extension-phenobic/releases)
-   - `PYTHON_SCRIPT` – full path to `PhenoBIC_backend.py`. Download the file from this repository onto your machine.
+   - `PYTHON_SCRIPT` – full path to `PhenoBIC_backend.py`. Download the file from [here](scripts/PhenoBIC_backend.py).
    - `PYTHON_EXE` – path to the Python executable from Step 1.
 
  - **Optional settings**  
