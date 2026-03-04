@@ -2,8 +2,6 @@
 
 This extension adds support to run **PhenoBIC** (cell phenotype inference) within QuPath. It uses a Python environment to run a tile-based deep learning inference pipeline on multiplex images, while QuPath handles project management, cell segmentation, and measurement export/import.
 
-This extension supports TIFF and TIFF-derived image formats (e.g. OME-TIFF).
-
 ---
 
 ## Citing
@@ -13,6 +11,14 @@ Please cite this extension by linking to this GitHub repository or to the releas
 If you use this extension in your work, please also cite the following:
 
 - **QuPath**: Bankhead, P. et al. **QuPath: Open source software for digital pathology image analysis**. *Scientific Reports* (2017). <https://doi.org/10.1038/s41598-017-17204-5>
+
+---
+
+## System Requirements
+
+- Windows Operating System
+- Supports TIFF and TIFF-derived multiplex image formats (e.g. OME-TIFF)
+- [QuPath v0.6.0](https://github.com/qupath/qupath/releases): You can try other versions but this was the version it has been fully tested on
 
 ---
 
@@ -64,7 +70,6 @@ Restart QuPath after installing.
 1. **Open a project** and an image that has **detections** (i.e. cell segmentations).
 2. Go to **Extensions → PhenoBIC → Run PhenoBIC → Cell phenotyping with PhenoBIC**.  
    The main script opens in the script editor.
-![PhenoBIC script CONFIG BLOCK](imgs/CONFIG_BLOCKS.png)
 
 3. Run the script:
 
@@ -77,8 +82,8 @@ Restart QuPath after installing.
    - `PYTHON_EXE` – path to the Python executable from Step 1.
 
  - **Optional settings**  
-   In the same script you can adjust other parameters to tailer your use of PhenoBIC.
-   - `PREPROCESS_FIELD`: Set to `"slide"` or `"TMA core"` depending on whether you would like normalization to be done on a full-image basis or separately for each TMA core (if there are TMA cores). We recommend core-level normalization when working with TMAs.
+    In the **OPTIONAL CONFIG** block, you can adjust other parameters to tailor your use of PhenoBIC.
+   - `PREPROCESS_FIELD`: Set to `"slide"` or `"TMA core"` depending on whether you would like normalization to be done on a full-image basis or separately for each TMA core (if there are TMA core Object in the QuPath Project). We recommend core-level normalization when working with TMAs.
    - `TILE_SIZE`: Size of tiles used in the back-end. For maximum speed, make this as large as possible without running into memory issues. Will affect speed of the run considerably.
    - `NUM_CELLS_BATCH`: Make this as large as possible without running into memory issues for maximum processing speed. 4,000 by default is fine. Prioritize changing `TILE_size` to improve run speed.
    - `USE_GPU`: Set `true` to use GPU and `false` to not
