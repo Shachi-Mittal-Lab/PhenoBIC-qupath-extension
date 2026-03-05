@@ -60,7 +60,7 @@ The extension runs the Python script via this executable. Activate your environm
 
 - (Anaconda Prompt):
   ```text
-  conda activate PhenoBIC_GPU
+  conda activate PhenoBIC
   where python
   ```
   Example output: `C:/Users/.../envs/PhenoBIC_GPU/python.exe`
