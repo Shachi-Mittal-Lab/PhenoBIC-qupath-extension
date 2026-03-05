@@ -18,7 +18,7 @@ If you use this extension in your work, please also cite the following:
 
 - Windows Operating System
 - Supports TIFF and TIFF-derived multiplex image formats (e.g. OME-TIFF)
-- [QuPath v0.6.0](https://github.com/qupath/qupath/releases): You can try other versions but this was the version it has been fully tested on
+- [QuPath v0.6.0](https://github.com/qupath/qupath/releases): You can try other versions but this is the version it has been fully tested on
 
 ---
 
@@ -32,11 +32,18 @@ You need a Python environment with the PhenoBIC dependencies. You can use conda:
 
 2. Download [environment.yml](scripts/environment.yml)
 
-3. In an Anaconda prompt terminal, run this within the directory with the `environment.yml` file to create the PhenoBIC Python environment:
-
+3. In an Anaconda prompt terminal, get into the directory with the `environment.yml`
+E.g.
 ```bash
-conda env create -f environment.yml
-conda activate PhenoBIC_GPU   
+cd C:\path_to_folder_containing_environment.yml 
+```
+Then create the Python enviornment with the required packages to run PhenoBIC
+```bash
+conda env create -f environment.yml  
+```
+Then activate the Python environment:
+```bash
+conda activate PhenoBIC 
 ```
 
 It is not necessary to use a GPU for PhenoBIC inference but **for GPU acceleration**- you may need to install a GPU driver if you have not already. And then you need to install CUDA and cuDNN with conda to run tensorflow with GPU on Windows native.
