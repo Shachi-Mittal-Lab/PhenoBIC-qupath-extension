@@ -10,17 +10,17 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // REQUIRED CONFIG — edit these for your setup
 // ═══════════════════════════════════════════════════════════════════════════
-def CHANNELS = ["CD3e", "CD20"] // list of channel to run PhenoBIC (must match image channel names in QuPath)
-def MODEL_PATH = "D:/8MyLym/phen_classifiers/manu_classifiers/EfficientNetV2S_12_9_25_train4.keras" // local path to PhenoBIC model
-def PYTHON_SCRIPT = "C:/Users/asankar6/Desktop/PhenoBIC_QuPath/batch_phenotyping_from_OMETIFF_PhenoBIC.py" // local path to PhenoBIC python script
-def PYTHON_EXE = "C:/Users/asankar6/AppData/Local/anaconda3/envs/PhenoBIC_GPU/python.exe" // local path to PhenoBIC python executable
+def CHANNELS = ["CD3 (Opal 480)", "CD8 (Opal 780)"] // list of channel to run PhenoBIC (must match image channel names in QuPath)
+def MODEL_PATH = "D:/8MyLym/phen_classifiers/manu_classifiers/PhenoBIC_model1.keras" // local path to PhenoBIC model
+def PYTHON_SCRIPT = "C:/Users/asankar6/Desktop/PhenoBIC-qupath-extension/scripts/PhenoBIC_backend.py" // local path to PhenoBIC python script
+def PYTHON_EXE = "C:/Users/asankar6/AppData/Local/anaconda3/envs/PhenoBIC/python.exe" // local path to PhenoBIC python executable
+def PREPROCESS_FIELD = "whole image" // "whole image" = whole-image percentiles; "TMA core" = percentiles computed per TMA core
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════════════════════
 // OPTIONAL CONFIG
 // ═══════════════════════════════════════════════════════════════════════════
-def PREPROCESS_FIELD = "TMA core" // "slide" = whole-slide percentiles; "TMA core" = percentiles computed per TMA core
-def TILE_SIZE = 10000 // For maximum speed --> set as large as possible without running into memory issues. Max tile size if full-image memory load not possible (image split into TILE_SIZE x TILE_SIZE pixels squares)
+def TILE_SIZE = 10000 // Square tile size in pixels. For maximum speed --> set as large as possible without running into memory issues.
 def NUM_CELLS_BATCH = 4000 // For maximum multiprocessing speed --> set as large as possible without running into memory issues
 def USE_GPU = false // Set false to not use GPU
 def BUFFER_RATIO = 0.1 // Recommended to use ten percent (0.1) buffered cell bounding box of cell expression classification
@@ -42,6 +42,7 @@ import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.Comparator
 import java.util.Collections
+import java.util.Arrays
 
 // For easy reference throughout the script
 def BOUNDS_X = "Bounds_x"
@@ -129,7 +130,7 @@ if (!hasBounds) {
     log "Bounds measurements added."
 }
 
-// Resolve image path and output file paths (used by both slide and TMA-core paths)
+// Resolve image path and output file paths (used by both whole image and TMA-core paths)
 def imagePath = null
 // Get image path on local disk
 def uris = server.getURIs()
@@ -174,16 +175,16 @@ def modelNorm = pathForSubprocess(MODEL_PATH)
 def pythonExe = (PYTHON_EXE?.trim() ?: "python").trim()
 
 // Check if the PREPROCESS_FIELD is valid
-if (PREPROCESS_FIELD != "slide" && PREPROCESS_FIELD != "TMA core") {
-    log "PREPROCESS_FIELD must be 'slide' or 'TMA core'. Got: ${PREPROCESS_FIELD}"
+if (PREPROCESS_FIELD != "whole image" && PREPROCESS_FIELD != "TMA core") {
+    log "PREPROCESS_FIELD must be 'whole image' or 'TMA core'. Got: ${PREPROCESS_FIELD}"
     return
 }
 
 def channelResults = []
 
-// Normalize percentiles for the whole slide
-if (PREPROCESS_FIELD == "slide") {
-// (3) Generate upper & lower normalization percentiles for each channel if not already present (slide)
+// Normalize percentiles for the whole image
+if (PREPROCESS_FIELD == "whole image") {
+// (3) Generate upper & lower normalization percentiles for each channel if not already present
 def channelInfo = []
 for (def chName : CHANNELS) {
     def channelIndex = channelNames.indexOf(chName)
@@ -199,7 +200,10 @@ for (def chName : CHANNELS) {
     def firstMl = detections[0].getMeasurementList()
     boolean hasPercentiles = firstMl.containsKey(lowPercentileMeas) && firstMl.containsKey(highPercentileMeas)
     // If not, computing the percentiles for each cell
+    def numCells = detections.size()
+    int nextUpdate = 10
     if (!hasPercentiles) {
+        cur_cell = 0
         log "Computing low/high percentile intensity for channel '${chName}'..."
         // iterate each cell, get the pixels within the region
         for (def cell : detections) {
@@ -208,29 +212,32 @@ for (def chName : CHANNELS) {
             def region = RegionRequest.createInstance(server.getPath(), 1.0, roi)
             def img = server.readRegion(region)
             def raster = img.getRaster()
-            def pixels = []
-            for (int y = 0; y < img.getHeight(); y++) {
-                for (int x = 0; x < img.getWidth(); x++) {
-                    double value = raster.getSampleDouble(x, y, channelIndex)
-                    pixels.add(value)
-                }
-            }
+            int w = img.getWidth()
+            int h = img.getHeight()
+            int n = w * h
+            double[] pixels = new double[n]
+            raster.getSamples(0, 0, w, h, channelIndex, pixels)
             // Add dummy measurements for cells with no pixels in the channel region
-            if (pixels.isEmpty()) {
+            if (n == 0) {
                 cell.getMeasurementList().put(lowPercentileMeas, 0.0)
                 cell.getMeasurementList().put(highPercentileMeas, 0.0)
                 continue
             }
-            // sort pixels (inplace)to compute the percentile indices
-            Collections.sort(pixels)
-            int highIdx = Math.min((int)(UPPER_CLIP_PERC * (pixels.size() - 1)), pixels.size() - 1)
-            int lowIdx = Math.min((int)(LOWER_CLIP_PERC * (pixels.size() - 1)), pixels.size() - 1)
-            // Get the value of the pixel intensity at the upper and lower clip percentiles
+            // Sort pixels in place to compute percentile indices
+            Arrays.sort(pixels)
+            int highIdx = Math.min((int)(UPPER_CLIP_PERC * (n - 1)), n - 1)
+            int lowIdx = Math.min((int)(LOWER_CLIP_PERC * (n - 1)), n - 1)
             double lowVal = pixels[lowIdx]
             double highVal = pixels[highIdx]
             // generate the lower and upper percentile measurements for the cells
             cell.getMeasurementList().put(lowPercentileMeas, lowVal)
             cell.getMeasurementList().put(highPercentileMeas, highVal)
+            cur_cell = cur_cell + 1
+            int percent = (cur_cell) * 100 / numCells
+            if (percent >= nextUpdate) {
+                log "${nextUpdate}% cells computed"
+                nextUpdate += 10
+            }
         }
         // Update object hierarchy with percentile measurements
         imageData.getHierarchy().fireHierarchyChangedEvent(imageData.getHierarchy(), imageData.getHierarchy().getRootObject())
@@ -369,7 +376,7 @@ for (def info : channelInfo) {
     def tmaGrid = hierarchy.getTMAGrid()
     // Check if the TMA grid is found
     if (tmaGrid == null) {
-        log "No TMA grid found. Use PREPROCESS_FIELD = 'slide' or add a TMA grid to the image."
+        log "No TMA grid found. Use PREPROCESS_FIELD = 'whole image' or add a TMA grid to the image."
         return
     }
     // Get list of TMA cores
@@ -411,31 +418,38 @@ for (def info : channelInfo) {
             boolean hasPercentiles = firstMl.containsKey(lowPercentileMeas) && firstMl.containsKey(highPercentileMeas)
             if (!hasPercentiles) {
                 log "Computing low/high percentile for channel '${chName}' (core ${coreName})..."
+                def numCellsCore = coreDetections.size()
+                int nextUpdate = 10
+                int coreCurCell = 0
                 for (def cell : coreDetections) {
                     def roi = cell.getROI()
                     if (roi == null) continue
                     def region = RegionRequest.createInstance(server.getPath(), 1.0, roi)
                     def img = server.readRegion(region)
                     def raster = img.getRaster()
-                    def pixels = []
-                    for (int y = 0; y < img.getHeight(); y++) {
-                        for (int x = 0; x < img.getWidth(); x++) {
-                            double value = raster.getSampleDouble(x, y, channelIndex)
-                            pixels.add(value)
-                        }
-                    }
-                    if (pixels.isEmpty()) {
+                    int w = img.getWidth()
+                    int h = img.getHeight()
+                    int n = w * h
+                    double[] pixels = new double[n]
+                    raster.getSamples(0, 0, w, h, channelIndex, pixels)
+                    if (n == 0) {
                         cell.getMeasurementList().put(lowPercentileMeas, 0.0)
                         cell.getMeasurementList().put(highPercentileMeas, 0.0)
                         continue
                     }
-                    Collections.sort(pixels)
-                    int highIdx = Math.min((int)(UPPER_CLIP_PERC * (pixels.size() - 1)), pixels.size() - 1)
-                    int lowIdx = Math.min((int)(LOWER_CLIP_PERC * (pixels.size() - 1)), pixels.size() - 1)
+                    Arrays.sort(pixels)
+                    int highIdx = Math.min((int)(UPPER_CLIP_PERC * (n - 1)), n - 1)
+                    int lowIdx = Math.min((int)(LOWER_CLIP_PERC * (n - 1)), n - 1)
                     double lowVal = pixels[lowIdx]
                     double highVal = pixels[highIdx]
                     cell.getMeasurementList().put(lowPercentileMeas, lowVal)
                     cell.getMeasurementList().put(highPercentileMeas, highVal)
+                    coreCurCell++
+                    int percent = coreCurCell * 100 / numCellsCore
+                    if (percent >= nextUpdate) {
+                        log "${nextUpdate}% cells computed (core ${coreName})"
+                        nextUpdate += 10
+                    }
                 }
                 // Update object hierarchy with percentile measurements
                 imageData.getHierarchy().fireHierarchyChangedEvent(imageData.getHierarchy(), imageData.getHierarchy().getRootObject())

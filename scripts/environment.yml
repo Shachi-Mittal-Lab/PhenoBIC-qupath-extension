@@ -1,26 +1,20 @@
 # Conda environment for PhenoBIC phenotype inference (GPU).
 # Create with: conda env create -f environment.yml
 
-name: PhenoBIC_GPU
+name: PhenoBIC
 channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.11
-  - pip
-  - pandas
-  # TF 2.14 requires NumPy 1.x; NumPy 2.x causes AttributeError/TypeError on import
-  - "numpy>=1.24,<2"
-  - tifffile
-  - zarr
-  - pillow
+  - python=3.9.20
+  - pip=24.2
+  - pandas=2.2.3
+  - numpy=1.26.4
+  - tifffile=2023.4.12
+  - zarr=2.18.2
+  - pillow=10.4.0
+  - scipy=1.13.1
   - pip:
-    # TF 2.14 avoids known .keras zip load bug (ValueError: "accessible .keras zip file")
-    # See: https://stackoverflow.com/questions/77993956
-    - tensorflow==2.14.0
-    # BioIO for OME-TIFF (avoids channels-as-samples dimension errors; see bioio-devs/bioio-ome-tiff#14)
-    - bioio
-    - bioio-ome-tiff
-    - psutil
+    - tensorflow==2.10.1
     # zarr 2.x needs cbuffer_sizes/cbuffer_metainfo; numcodecs>=0.16 removed them (gh#721)
-    - "numcodecs<0.16"
+    - numcodecs==0.12.1

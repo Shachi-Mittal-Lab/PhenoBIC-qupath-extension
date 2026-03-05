@@ -39,6 +39,13 @@ conda env create -f environment.yml
 conda activate PhenoBIC_GPU   
 ```
 
+It is not necessary to use a GPU for PhenoBIC inference but **for GPU acceleration**- you may need to install a GPU driver if you have not already. And then you need to install CUDA and cuDNN with conda to run tensorflow with GPU on Windows native.
+
+E.g.
+```bash
+conda install -c conda-forge cudatoolkit=11.2 cudnn=8.1.0 
+```
+Please refer to [tensorflow documentation](https://www.tensorflow.org/install/pip#windows-native_1) for additional instructions.
 
 **Get the path to the Python executable**
 
@@ -49,7 +56,7 @@ The extension runs the Python script via this executable. Activate your environm
   conda activate PhenoBIC_GPU
   where python
   ```
-  Example output: `C:\Users\...\envs\PhenoBIC_GPU\python.exe`
+  Example output: `C:/Users/.../envs/PhenoBIC_GPU/python.exe`
 
 
 You will need this path for the script’s **REQUIRED CONFIG** (see below).
@@ -80,11 +87,12 @@ Restart QuPath after installing.
    - `MODEL_PATH` – full path to your PhenoBIC `.keras` model. Install from [here](https://github.com/your-org/qupath-extension-phenobic/releases)
    - `PYTHON_SCRIPT` – full path to `PhenoBIC_backend.py`. Download the file from [here](scripts/PhenoBIC_backend.py).
    - `PYTHON_EXE` – path to the Python executable from Step 1.
+   - `PREPROCESS_FIELD`: Set to `"whole image"` or `"TMA core"` depending on whether you would like normalization to be done on a full-image basis or separately for each TMA core (if there are TMA core Object in the QuPath Project). We recommend core-level normalization when working with TMAs.
+**WARNING: Using backslashes ('\') in file paths will cause errors. Please only use forward slash ('/')**
 
  - **Optional settings**  
     In the **OPTIONAL CONFIG** block, you can adjust other parameters to tailor your use of PhenoBIC.
-   - `PREPROCESS_FIELD`: Set to `"slide"` or `"TMA core"` depending on whether you would like normalization to be done on a full-image basis or separately for each TMA core (if there are TMA core Object in the QuPath Project). We recommend core-level normalization when working with TMAs.
-   - `TILE_SIZE`: Size of tiles used in the back-end. For maximum speed, make this as large as possible without running into memory issues. Will affect speed of the run considerably.
+   - `TILE_SIZE`: Size of square tiles in pixels used in the back-end, 10,000 pixels by default. For maximum speed, make this as large as possible without running into memory issues. Will affect speed of the run considerably.
    - `NUM_CELLS_BATCH`: Make this as large as possible without running into memory issues for maximum processing speed. 4,000 by default is fine. Prioritize changing `TILE_size` to improve run speed.
    - `USE_GPU`: Set `true` to use GPU and `false` to not
    - `BUFFER_RATIO`: How much of the mutliplex signal around the cell to feed to the model. Recommended=0.1 → 10% buffering of cell bounding boxes.
@@ -94,6 +102,8 @@ Restart QuPath after installing.
  - **Run** – process the current image.
 
  - **Run for project** – batch process all images in the project.
+
+ - **Save the scipt** - You can save the script with your specific configurations for easy access in another session.
 
 ### PhenoBIC outputs
 

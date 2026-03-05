@@ -8,7 +8,9 @@ Reads pre-exported measurements TSV (bounds + normalization parameters). Uses a
 multiprocessing pool to create an array of cell bounding boxcrops per batch followed
 by PhenoBIC inference for each cell crop.
 """
+
 import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # suppress INFO and WARNING messages
 import sys
 
 # Disable GPU before TensorFlow is imported (e.g. --no-gpu from QuPath/Groovy).

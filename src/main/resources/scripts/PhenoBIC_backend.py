@@ -8,7 +8,9 @@ Reads pre-exported measurements TSV (bounds + normalization parameters). Uses a
 multiprocessing pool to create an array of cell bounding boxcrops per batch followed
 by PhenoBIC inference for each cell crop.
 """
+
 import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # suppress INFO and WARNING messages
 import sys
 
 # Disable GPU before TensorFlow is imported (e.g. --no-gpu from QuPath/Groovy).
@@ -29,7 +31,7 @@ import zarr
 # OME-TIFF axis and series selection
 
 def _ometiff_zarr_axes(shape):
-    """Infer (y_axis, x_axis, c_axis) from array shape. c_axis is None for 2D."""
+    """Infer (y_axis, x_axis, c_axis) from array shape."""
     shape = tuple(shape)
     nd = len(shape)
     if nd == 2:
@@ -43,7 +45,9 @@ def _ometiff_zarr_axes(shape):
 
 def _axes_from_series_axes(axes, shape):
     """Get (y_axis, x_axis, c_axis) from tifffile series.axes; fallback to shape heuristic."""
+    # Read series from tifffile to find the index in the dimensionality of X, Y, and channel
     if axes and "Y" in axes and "X" in axes:
+        # Get the index of the Y, X, and channel axes (C or S) and return
         y_axis = axes.index("Y")
         x_axis = axes.index("X")
         if "C" in axes:
@@ -58,10 +62,12 @@ def _axes_from_series_axes(axes, shape):
 
 def _series_index_with_largest_yx(tif):
     """Return the series index whose shape has the largest Y*X (spatial extent)."""
+    # The idea of this function is to find the highest resolution series
     if not tif.series:
         raise ValueError("No series in TIFF")
     best_i = 0
     best_size = 0
+    # Iteratre over all the series
     for i, s in enumerate(tif.series):
         shape = s.shape
         axes = getattr(s, "axes", None)
@@ -79,10 +85,13 @@ def _ometiff_shape_and_axes(image_path):
     with tifffile.TiffFile(image_path) as tif:
         if not tif.series:
             raise ValueError(f"No series in TIFF: {image_path}")
+        # Find the highest resolution series
         idx = _series_index_with_largest_yx(tif)
+        # Lazy load the series
         series = tif.series[idx]
         shape = series.shape
         axes = getattr(series, "axes", None)
+    # Get the axes of the series that correspond to Y, X, and channel
     y_axis, x_axis, c_axis = _axes_from_series_axes(axes, shape)
     return shape, y_axis, x_axis, c_axis
 
@@ -90,7 +99,7 @@ def _ometiff_shape_and_axes(image_path):
 # Tile-based channel reading (tifffile + zarr)
 
 def _slice_for_axis(i, y_axis, x_axis, c_axis, channel_index, y_lo, y_hi, x_lo, x_hi):
-    """Return the slice for axis i: Y/X window or channel index as needed."""
+    """Return the slice for axis i: Y, X, or channel dimension."""
     if i == y_axis:
         return slice(y_lo, y_hi) if (y_lo is not None and y_hi is not None) else slice(None)
     if i == x_axis:
@@ -108,18 +117,22 @@ def _read_channel_from_ometiff_zarr(
     Read one channel from OME-TIFF via tifffile+zarr.
     Optional window [y_lo:y_hi, x_lo:x_hi]. Uses series and (if Group) array with largest Y*X.
     """
+    # Read (lazily) the high-res image from the image file
     with tifffile.TiffFile(image_path) as tif:
         idx = _series_index_with_largest_yx(tif)
         store = tif.series[idx].aszarr()
         root = zarr.open(store, mode="r")
 
-        # Single array vs Group (pyramid): pick array with largest X*Y.
+        # If its an array this is the final channel.
         if hasattr(root, "ndim"):
             arr = root
+        # If its a Group object, we need to find the highest resolution array
         else:
+            # Get the list of arrays in the group
             keys = list(getattr(root, "array_keys", lambda: list(root.keys()))())
             if not keys:
                 raise ValueError("No array in OME-TIFF zarr store")
+            # Iterate over all the arrays in the group and find the largest X*Y (highest resolution)
             best_key = keys[0]
             best_size = 0
             for k in keys:
@@ -131,12 +144,16 @@ def _read_channel_from_ometiff_zarr(
                         best_key = k
             arr = root[best_key]
 
+        # Dimensions of the high res image array
         nd = arr.ndim
+        # Create a tuple of slices for the Y, X, and channel dimensions
         idx = tuple(
             _slice_for_axis(i, y_axis, x_axis, c_axis, channel_index, y_lo, y_hi, x_lo, x_hi)
             for i in range(nd)
         )
+        # Read the sliced array into a numpy array
         out = np.asarray(arr[idx], dtype=np.float64)
+    # Squeeze the array to remove any singleton dimensions
     return np.squeeze(out)
 
 
@@ -166,18 +183,24 @@ def _init_worker_tile(image_path, channel_index, y_lo, y_hi, x_lo, x_hi, y_axis,
 
 
 def _extract_roi(bounds):
-    """Crop the worker's channel plane for one cell. Bounds are (x, y, w, h, x_buf, y_buf) in tile-relative coords."""
+    """Crop the worker's channel plane for one cell.
+    Bounds are (x, y, w, h, x_buf, y_buf) in tile-relative coordinates.
+    x and y are upper-left coordinates of the cell bounding box."""
     global _worker_channel_plane, _worker_y_axis, _worker_x_axis
     plane = _worker_channel_plane
     ya, xa = _worker_y_axis, _worker_x_axis
     x, y, w, h, x_buf, y_buf = bounds
+    # Calculate the lower and upper bounds of the cell bounding box in the channel plane
+    # Including buffering by a factor of buffer ratio (as show by x_buf and y_buf)
     y_lo = max(0, int(y - y_buf))
     y_hi = min(plane.shape[ya], int(y + h + y_buf))
     x_lo = max(0, int(x - x_buf))
     x_hi = min(plane.shape[xa], int(x + w + x_buf))
     s = [slice(None), slice(None)]
+    # Generate and X and Y slices for the crop of the cell
     s[ya] = slice(y_lo, y_hi)
     s[xa] = slice(x_lo, x_hi)
+    # Return the cropped channel plane
     return np.asarray(plane[tuple(s)])
 
 
@@ -190,25 +213,30 @@ def preprocess_roi(roi, min_val, max_val):
 # Tile assignment and main pipeline
 
 def _log(msg):
-    """Print progress (e.g. for QuPath log)."""
+    """Print progress messages to the console."""
     print(msg, flush=True)
 
 
 def _tile_contains_box(x_lo, y_lo, x_hi, y_hi, bx_lo, by_lo, bx_hi, by_hi):
-    """True if tile [x_lo,x_hi) x [y_lo,y_hi) fully contains the box [bx_lo,bx_hi] x [by_lo,by_hi]."""
+    """Does the fully buffered cell bounding box fit within the tile?"""
     return x_lo <= bx_lo and bx_hi <= x_hi and y_lo <= by_lo and by_hi <= y_hi
 
 
 def _assign_cell_to_tile(cx, cy, bx_lo, by_lo, bx_hi, by_hi, n_ty, n_tx, step_y, step_x, tile_size, height, width):
-    """Return (ty, tx) of the tile that contains the cell centroid and its full buffered box; else (0, 0)."""
+    """Return index of the tile that contains the cell centroid and its full buffered bounding box."""
+    # Iterate over all the tiles in the grid
     for ty in range(n_ty):
         for tx in range(n_tx):
+            # Calculate the lower and upper bounds of the tile
             y_lo = ty * step_y
             y_hi = min(ty * step_y + tile_size, height)
             x_lo = tx * step_x
             x_hi = min(tx * step_x + tile_size, width)
+            # Check if the cell centroid and its full buffered bounding box fit within the tile
             if x_lo <= cx < x_hi and y_lo <= cy < y_hi and _tile_contains_box(x_lo, y_lo, x_hi, y_hi, bx_lo, by_lo, bx_hi, by_hi):
+                # Return the index of the tile if it does
                 return (ty, tx)
+    # If no tile is found, return (0, 0)
     return (0, 0)
 
 
@@ -225,19 +253,22 @@ def run_single_image(
     tile_size=10000,
 ):
     """
-    Run PhenoBIC phenotype inference for one image using tile-based reads only.
+    Run PhenoBIC phenotype inference for one image using tile-based reads.
     Splits the image into overlapping tiles, assigns each cell to a tile, and processes tile by tile.
     """
+    # Ensure image file path exists and is valid
     image_path = os.path.abspath(os.path.normpath(image_path.strip()))
     if not os.path.isfile(image_path):
         raise FileNotFoundError(f"Image file not found: {image_path!r}")
 
+    # Load the PhenoBIC model
     _log(f"[PhenoBIC] Loading model: {os.path.basename(model_path)}")
     model = tf.keras.models.load_model(os.path.abspath(model_path.strip()), compile=False)
 
     # Load and normalize measurements TSV (QuPath export).
     df = pd.read_csv(measurements_tsv_path, sep="\t")
     df.columns = [str(c).strip().replace("\ufeff", "") for c in df.columns]
+    # Rename columns to standardize QuPath export names
     _COLUMN_ALIASES = {
         "Bounds x": "Bounds_x",
         "Bounds y": "Bounds_y",
@@ -248,13 +279,17 @@ def run_single_image(
     rename = {k: v for k, v in _COLUMN_ALIASES.items() if k in df.columns and v not in df.columns}
     if rename:
         df = df.rename(columns=rename)
+    # Ensure the required columns are present
     required_cols = ["Object ID", "Bounds_x", "Bounds_y", "Bounds_width", "Bounds_height"]
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
         raise ValueError(f"Measurements TSV missing column(s): {missing}. Actual: {list(df.columns)}")
-
+    
+    # Number of cells to process
     num_cells = len(df)
+    # Get the image name
     image_name = os.path.basename(image_path)
+    # Get the x, y, width, height, and buffer of the cell bounding boxes
     x_col = np.floor(df["Bounds_x"].astype(float)).astype(int)
     y_col = np.floor(df["Bounds_y"].astype(float)).astype(int)
     w_col = np.ceil(df["Bounds_width"].astype(float)).astype(int)
@@ -263,82 +298,116 @@ def run_single_image(
     y_buf_col = np.ceil(h_col * buffer_ratio).astype(int)
     object_ids = df["Object ID"].values
 
-    # Image dimensions and axes (no pixel load).
+    # Get the image dimensions and axes (no pixel load).
     shape, y_axis, x_axis, c_axis = _ometiff_shape_and_axes(image_path)
     height = int(shape[y_axis])
     width = int(shape[x_axis])
 
     # Tile grid: overlap so each cell's buffered box fits in at least one tile.
+    # Create an ImageDataGenerator for preprocessing the images
     gen = tf.keras.preprocessing.image.ImageDataGenerator(rescale=1.0 / 255)
+    # Calculate the buffered width and height of the cells
     buffered_w = w_col + 2 * x_buf_col
     buffered_h = h_col + 2 * y_buf_col
+    # Calculate the overlap between tiles (max of buffered width and height of cells)
     overlap = int(min(tile_size - 1, max(np.max(buffered_w), np.max(buffered_h)))) if num_cells else 0
+    # Calculate the step size for the x and y dimensions
     step_x = max(1, tile_size - overlap)
     step_y = max(1, tile_size - overlap)
+    # Calculate the number of tiles in the x and y dimensions
     n_tx = max(1, int(np.ceil(width / step_x)))
     n_ty = max(1, int(np.ceil(height / step_y)))
     _log(f"[PhenoBIC] Image: {image_name} — {num_cells} cells, tile {tile_size} px, overlap {overlap} px, {n_ty}x{n_tx} tiles")
 
     # Assign each cell to a tile (key = (ty, tx)); value = list of (object_id, x, y, w, h, x_buf, y_buf).
     tile_cells = {}
+    # iterate over all the cells
     for i in range(num_cells):
+        # Get the x, y, width, height, and buffer of the cell bounding boxes
         x, y = int(x_col.iloc[i]), int(y_col.iloc[i])
         w, h = int(w_col.iloc[i]), int(h_col.iloc[i])
         x_buf, y_buf = int(x_buf_col.iloc[i]), int(y_buf_col.iloc[i])
         bx_lo, by_lo = x - x_buf, y - y_buf
         bx_hi, by_hi = x + w + x_buf, y + h + y_buf
+        # Calculate the centroid of the cell
         cx, cy = x + w // 2, y + h // 2
+        # Assign the cell to a tile
         ty, tx = _assign_cell_to_tile(cx, cy, bx_lo, by_lo, bx_hi, by_hi, n_ty, n_tx, step_y, step_x, tile_size, height, width)
+        # Create a dictionary of tiles and the cells in them
         key = (ty, tx)
+        # If the tile is not in the dictionary, create a entry for it
         if key not in tile_cells:
             tile_cells[key] = []
+        # Add the cell to the dictionary
         tile_cells[key].append((object_ids[i], x, y, w, h, x_buf, y_buf))
 
     # Process each tile: load tile, extract ROIs, preprocess, predict, store by object ID.
+    # Dictionary to store Cell object IDs and the prediction for each cell
     predictions_dict = {}
+    # Iterate over all the tiles
     for ty in range(n_ty):
         for tx in range(n_tx):
             key = (ty, tx)
+            # If the tile is not in the dictionary or is empty, skip it because it doesn't contain any cells
             if key not in tile_cells or not tile_cells[key]:
                 continue
             cell_list = tile_cells[key]
+            # Calculate the lower and upper bounds of the tile
             y_lo = ty * step_y
             y_hi = min(ty * step_y + tile_size, height)
             x_lo = tx * step_x
             x_hi = min(tx * step_x + tile_size, width)
+            # Calculate the bounds of the cells in the tile relative to the tile
             bounds_tile_rel = [(x - x_lo, y - y_lo, w, h, x_buf, y_buf) for (_, x, y, w, h, x_buf, y_buf) in cell_list]
+            # Get the object IDs of the cells in the tile
             oids = [oid for (oid, *_) in cell_list]
 
+            # Create a pool of workers to extract the ROIs from the cells (multiprocessing)
             with mp.Pool(
+                # Initialize the worker with the image path, channel index, and the bounds of the tile
                 initializer=_init_worker_tile,
                 initargs=(image_path, channel_index, y_lo, y_hi, x_lo, x_hi, y_axis, x_axis, c_axis),
             ) as pool:
+                # Iterate over the cells in the tile in batches
                 for start in range(0, len(bounds_tile_rel), num_cells_batch):
+                    # Calculate the end index of the batch
                     end = min(start + num_cells_batch, len(bounds_tile_rel))
+                    # Get the bounds of the cells in the batch
                     batch_bounds = bounds_tile_rel[start:end]
+                    # Get the object IDs of the cells in the batch
                     batch_oids = oids[start:end]
+                    # Extract the ROIs from the cells
                     rois = pool.map(_extract_roi, batch_bounds)
+                    # Preprocess the ROIs
                     rois = [preprocess_roi(r, min_int, max_int) for r in rois]
+                    # Resize the ROIs to 48x48 pixels
                     rois = np.array([
                         np.asarray(Image.fromarray(np.asarray(im, dtype=np.uint8)).resize((48, 48), Image.NEAREST))
                         for im in rois
                     ])
+                    # PhenoBIC prediction for each cell in the batch
                     flow = gen.flow(x=rois, batch_size=32, shuffle=False)
                     pred = model.predict(flow)
                     pred = pred.reshape(-1)
+                    # Convert the predictions to binary cell expressionlabels
                     labels = np.where(pred <= 0.5, "neg", "pos")
+                    # Store the predictions for each cell
                     for j, oid in enumerate(batch_oids):
                         predictions_dict[oid] = labels[j]
             _log(f"[PhenoBIC] Tile ({ty + 1},{tx + 1})/{n_ty}x{n_tx} — {len(cell_list)} cells done ({len(predictions_dict)}/{num_cells})")
 
+    # Convert predictions dictionary to a list of predictions
     predictions_list = [predictions_dict[oid] for oid in object_ids]
     _log(f"[PhenoBIC] Writing results: {os.path.basename(output_csv_path)}")
+    # Create a DataFrame with the object IDs and the predictions
     out = pd.DataFrame({"Object ID": df["Object ID"], "Class": predictions_list})
+    # Write the DataFrame to a CSV file
     out.to_csv(output_csv_path, index=False)
     _log(f"[PhenoBIC] Done. {num_cells} cells classified.")
+    # Return the path to the output CSV file
     return output_csv_path
 
-
+# Parse command line arguments
 def parse_args():
     p = argparse.ArgumentParser(description="PhenoBIC phenotype inference (tile-based, single image).")
     p.add_argument("--image", type=str, help="Path to OME-TIFF (or compatible) image")
@@ -354,14 +423,19 @@ def parse_args():
     p.add_argument("--no-gpu", action="store_true", help="Disable GPU (CPU only)")
     return p.parse_args()
 
-
+# Main function to run the script
 if __name__ == "__main__":
     args = parse_args()
+    # Check if the measurements TSV file is provided
     if not args.measurements_tsv:
+        # Print an error message and exit
         print("Missing --measurements-tsv. Use --help.", file=sys.stderr)
         sys.exit(1)
+    # Check if all the required arguments are provided
     required = (args.image, args.min, args.max, args.channel_index, args.output_csv, args.model_path, args.num_cells_batch)
+    # If all the required arguments are provided, run the script
     if all(r is not None for r in required):
+        # Run the script
         run_single_image(
             args.image,
             args.measurements_tsv,
