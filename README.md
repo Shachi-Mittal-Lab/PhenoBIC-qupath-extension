@@ -95,12 +95,12 @@ Restart QuPath after installing.
    - `PYTHON_SCRIPT` – full path to `PhenoBIC_backend.py`. Download the file from [here](scripts/PhenoBIC_backend.py).
    - `PYTHON_EXE` – path to the Python executable from Step 1.
    - `PREPROCESS_FIELD`: Set to `"whole image"` or `"TMA core"` depending on whether you would like normalization to be done on a full-image basis or separately for each TMA core (if there are TMA core Object in the QuPath Project). We recommend core-level normalization when working with TMAs.
-**WARNING: Using backslashes ('\') in file paths will cause errors. Please only use forward slash ('/')**
+**WARNING: Using backslashes (`\`) in file paths will cause errors. Please only use forward slash (`/`)**
 
  - **Optional settings**  
     In the **OPTIONAL CONFIG** block, you can adjust other parameters to tailor your use of PhenoBIC.
    - `TILE_SIZE`: Size of square tiles in pixels used in the back-end, 10,000 pixels by default. For maximum speed, make this as large as possible without running into memory issues. Will affect speed of the run considerably.
-   - `NUM_CELLS_BATCH`: Make this as large as possible without running into memory issues for maximum processing speed. 4,000 by default is fine. Prioritize changing `TILE_size` to improve run speed.
+   - `NUM_CELLS_BATCH`: Make this as large as possible without running into memory issues for maximum processing speed. 4,000 by default is fine. Prioritize changing `TILE_SIZE` to improve run speed.
    - `USE_GPU`: Set `true` to use GPU and `false` to not
    - `BUFFER_RATIO`: How much of the mutliplex signal around the cell to feed to the model. Recommended=0.1 → 10% buffering of cell bounding boxes.
    - `UPPER_CLIP_PERC`: Upper clip normalization parameter (recommended=0.9). This is the maximum of the <u>90<sup>th</sup></u> percentile within-cell channel intensity of all cells in the preprocessing field.
@@ -148,7 +148,8 @@ Output JARs are in `build/libs/`.
 
 - **Python path**  
   If the subprocess fails, check that `PYTHON_EXE` is correct and that the same environment has the required packages (TensorFlow, tifffile, zarr, etc.). On some systems you may need to set or extend `PATH` so the executable is found.
-
+**WARNING:** Using backslashes (`\`) in file paths will cause errors. Please only use forward slash (`/`)
+  
 - **GPU**  
   Set `USE_GPU = true` in the script only if your TensorFlow build and drivers support GPU; otherwise keep it `false` to use CPU.
 
