@@ -36,7 +36,7 @@ You need a Python environment with the PhenoBIC dependencies. You can use conda:
 
 ```bash
 conda env create -f environment.yml
-conda activate PhenoBIC_GPU   
+conda activate PhenoBIC  
 ```
 
 It is not necessary to use a GPU for PhenoBIC inference but **for GPU acceleration**- you may need to install a GPU driver if you have not already. And then you need to install CUDA and cuDNN with conda to run tensorflow with GPU on Windows native.
