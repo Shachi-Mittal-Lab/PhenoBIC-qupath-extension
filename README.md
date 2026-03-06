@@ -116,7 +116,9 @@ Restart QuPath after installing.
 
 Outputs are written under the project folder:
 
-- `PhenoBIC_output/measurements/` – TSV files (bounds + normalization parameters). Required for PhenoBIC predictions.
+- `PhenoBIC_output/measurements/` – TSV files containing bounding box coordinates of each cell. Required for PhenoBIC predictions.
+- `PhenoBIC_output/min_normalization/` – JSON files containing the lower clipping parameter for the raw intensity of each channel. Required for PhenoBIC predictions.
+- `PhenoBIC_output/max_normalization/` – JSON files containing the upper clipping parameter for the raw intensity of each channel. Required for PhenoBIC predictions.
 - `PhenoBIC_output/results/` – CSV files with per-channel phenotype classes. This can be used for further downstream single-cell quantitative and spatial analyses.
 - QuPath detections are updated with measurements like `{ChannelName}_class` (1.0 = positive, 0.0 = negative). To visualize the cell expression class for any marker channel in the QuPath viewer, go to **Measure → Show measurement maps → {ChannelName}_class**.
 ![Visualization](imgs/visualize.png)
