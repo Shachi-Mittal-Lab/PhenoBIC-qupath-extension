@@ -18,6 +18,7 @@ if "--no-gpu" in sys.argv:
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 import argparse
+import json
 import multiprocessing as mp
 import numpy as np
 import pandas as pd
@@ -217,6 +218,22 @@ def _log(msg):
     print(msg, flush=True)
 
 
+def _write_normalization_json(json_path, channel_name, value):
+    """Write the normalization dictionary JSON file"""
+    data = {}
+    # If the JSON file exists, load the data from the file
+    # Allows appending norm params for new channel to existing JSON file
+    if os.path.isfile(json_path):
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    # Key=channel name and value=normalization value
+    data[channel_name] = value
+    os.makedirs(os.path.dirname(os.path.abspath(json_path)), exist_ok=True)
+    # Write JSON file
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
 def _tile_contains_box(x_lo, y_lo, x_hi, y_hi, bx_lo, by_lo, bx_hi, by_hi):
     """Does the fully buffered cell bounding box fit within the tile?"""
     return x_lo <= bx_lo and bx_hi <= x_hi and y_lo <= by_lo and by_hi <= y_hi
@@ -240,6 +257,226 @@ def _assign_cell_to_tile(cx, cy, bx_lo, by_lo, bx_hi, by_hi, n_ty, n_tx, step_y,
     return (0, 0)
 
 
+def _process_tile_for_percentiles(args):
+    """Worker: read one tile, compute per-cell percentiles for all cells in tile.
+    Returns [(cell_idx, low, high), ...]."""
+    # Get the arguments
+    (image_path, channel_index, y_axis, x_axis, c_axis, y_lo, y_hi, x_lo, x_hi,
+     cell_list, lower_percentile, upper_percentile) = args
+    # If no cells in the tile, return an empty list
+    if not cell_list:
+        return []
+    # Read the tile from the image channel
+    tile = _read_channel_from_ometiff_zarr(
+        image_path, channel_index, y_axis, x_axis, c_axis,
+        y_lo=y_lo, y_hi=y_hi, x_lo=x_lo, x_hi=x_hi,
+    )
+    # Get the Y and X axes
+    ya, xa = _plane_yx_axes(y_axis, x_axis)
+    # Initialize empty output list
+    results = []
+    # Iterate over all the cells in the tile
+    for (i, x, y, w, h) in cell_list:
+        # Calculate the lower and upper bounds of the cell in the tile relative coordinates
+        ry_lo, ry_hi = y - y_lo, y - y_lo + h
+        rx_lo, rx_hi = x - x_lo, x - x_lo + w
+        # Create a slice for the cell in the tile
+        s = [slice(None), slice(None)]
+        s[ya] = slice(ry_lo, ry_hi)
+        s[xa] = slice(rx_lo, rx_hi)
+        # Read the cell bbox region
+        roi = np.asarray(tile[tuple(s)])
+        # Flatten the array of channel signal in the cell bbox
+        flat = np.asarray(roi).ravel()
+        # Skip if no pixels in the cell bbox
+        if flat.size == 0:
+            continue
+        # Compute the lower and upper percentiles of the channel signal in the cell bbox
+        low = float(np.percentile(flat, lower_percentile))
+        high = float(np.percentile(flat, upper_percentile))
+        # Add the cell index, lower and upper percentiles to the output list
+        results.append((i, low, high))
+    # Return the results list
+    return results
+
+
+def _process_cell_box_for_percentiles(args):
+    """Worker: read one cell's bbox, compute percentiles.
+    Returns (cell_idx, low, high)."""
+    (image_path, channel_index, y_axis, x_axis, c_axis, cell_idx, x, y, w, h,
+     lower_percentile, upper_percentile) = args
+    if w <= 0 or h <= 0:
+        return (cell_idx, np.nan, np.nan)
+    try:
+        # Read the cell bbox region from the image channel
+        box = _read_channel_from_ometiff_zarr(
+            image_path, channel_index, y_axis, x_axis, c_axis,
+            y_lo=y, y_hi=y + h, x_lo=x, x_hi=x + w,
+        )
+        # Flatten the array of channel signal in the cell bbox
+        flat = np.asarray(box).ravel()
+        # Skip if no pixels in the cell bbox
+        if flat.size == 0:
+            return (cell_idx, np.nan, np.nan)
+        # Compute the lower and upper percentiles of the channel signal in the cell bbox
+        low = float(np.percentile(flat, lower_percentile))
+        high = float(np.percentile(flat, upper_percentile))
+        # Return the cell index, lower and upper percentiles
+        return (cell_idx, low, high)
+    except Exception:
+        return (cell_idx, np.nan, np.nan)
+
+
+def compute_normalization_from_bounds(
+    image_path,
+    measurements_tsv_path,
+    channel_index,
+    lower_percentile=10.0,
+    upper_percentile=90.0,
+    tile_size=5000,
+):
+    """
+    Compute min/max for normalization for entire preprocess field from per-cell
+    upper/lower percentiles
+    by tile-based reading of bounding boxes from the TSV and the image.
+    Returns (global_min, global_max) for use with preprocess_roi.
+    """
+    # Ensure image file path exists and is valid
+    image_path = os.path.abspath(os.path.normpath(image_path.strip()))
+    if not os.path.isfile(image_path):
+        raise FileNotFoundError(f"Image file not found: {image_path!r}")
+
+    # Read the measurements TSV file
+    df = pd.read_csv(measurements_tsv_path, sep="\t")
+    df.columns = [str(c).strip().replace("\ufeff", "") for c in df.columns]
+    # Rename columns to standardize QuPath export names
+    _COLUMN_ALIASES = {
+        "Bounds x": "Bounds_x",
+        "Bounds y": "Bounds_y",
+        "Bounds width": "Bounds_width",
+        "Bounds height": "Bounds_height",
+        "Object  ID": "Object ID",
+    }
+    rename = {k: v for k, v in _COLUMN_ALIASES.items() if k in df.columns and v not in df.columns}
+    if rename:
+        df = df.rename(columns=rename)
+    # Ensure the required columns are present
+    required_cols = ["Object ID", "Bounds_x", "Bounds_y", "Bounds_width", "Bounds_height"]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Measurements TSV missing column(s): {missing}. Actual: {list(df.columns)}")
+
+    # Number of cells
+    n_cells = len(df)
+    # Get the x, y, width, height of the cells' bounding boxes
+    x_col = np.floor(df["Bounds_x"].astype(float)).astype(int)
+    y_col = np.floor(df["Bounds_y"].astype(float)).astype(int)
+    w_col = np.ceil(df["Bounds_width"].astype(float)).astype(int)
+    h_col = np.ceil(df["Bounds_height"].astype(float)).astype(int)
+
+    # Get the image dimensions and axes
+    shape, y_axis, x_axis, c_axis = _ometiff_shape_and_axes(image_path)
+    height = int(shape[y_axis])
+    width = int(shape[x_axis])
+    # Calculate the step size for the x and y dimensions
+    step_x = max(1, tile_size)
+    step_y = max(1, tile_size)
+    # Calculate the number of tiles in the x and y dimensions
+    n_tx = max(1, int(np.ceil(width / step_x)))
+    n_ty = max(1, int(np.ceil(height / step_y)))
+
+    # Empty nan arrays
+    cell_lows = np.full(n_cells, np.nan)
+    cell_highs = np.full(n_cells, np.nan)
+
+    # Build list of cells in tile -> list of (cell_idx, x, y, w, h)
+    tile_cells = {}
+    for i in range(n_cells):
+        x, y = int(x_col.iloc[i]), int(y_col.iloc[i])
+        w, h = int(w_col.iloc[i]), int(h_col.iloc[i])
+        # Cell centroid
+        cx, cy = x + w // 2, y + h // 2
+        # Tile index which contains cell centroid
+        ty = min(int(cy // step_y), n_ty - 1)
+        tx = min(int(cx // step_x), n_tx - 1)
+        # Bounds of that tile
+        x_lo = tx * step_x
+        x_hi = min(tx * step_x + tile_size, width)
+        y_lo = ty * step_y
+        y_hi = min(ty * step_y + tile_size, height)
+        # If the cell is fully in the tile, add it to the tile cells dictionary
+        if _tile_contains_box(x_lo, y_lo, x_hi, y_hi, x, y, x + w, y + h):
+            key = (ty, tx)
+            if key not in tile_cells:
+                tile_cells[key] = []
+            tile_cells[key].append((i, x, y, w, h))
+
+    # Process tiles in parallel with multiprocessing
+    # Each worker reads one tile and computes percentiles for its cells
+    tile_tasks = []
+    # Iterate over all the tiles
+    for ty in range(n_ty):
+        for tx in range(n_tx):
+            key = (ty, tx)
+            # If the tile is not in the dictionary or is empty, skip it because it doesn't contain any cells
+            if key not in tile_cells or not tile_cells[key]:
+                continue
+            # Calculate the bounds of the tile
+            y_lo = ty * step_y
+            y_hi = min(ty * step_y + tile_size, height)
+            x_lo = tx * step_x
+            x_hi = min(tx * step_x + tile_size, width)
+            # Add the tile to the tile tasks list
+            tile_tasks.append((
+                image_path, channel_index, y_axis, x_axis, c_axis,
+                y_lo, y_hi, x_lo, x_hi,
+                tile_cells[key],
+                lower_percentile, upper_percentile,
+            ))
+    # Number of workers to use for the multiprocessing
+    n_workers = min(max(1, len(tile_tasks)), mp.cpu_count() or 8)
+    if tile_tasks:
+        # Create a pool of workers to process the tiles
+        with mp.Pool(processes=n_workers) as pool:
+            for result_list in pool.map(_process_tile_for_percentiles, tile_tasks):
+                # Record the lower and upper percentiles for each cell
+                for (i, low, high) in result_list:
+                    cell_lows[i] = low
+                    cell_highs[i] = high
+
+    # Cells not fully in any tile: read each box in parallel
+    # Works because we did not use overlapping tiles so there will be some cells that are not fully in any tile
+    fallback_indices = [i for i in range(n_cells) if np.isnan(cell_lows[i])]
+    if fallback_indices:
+        # Create a list of tasks to process the cells that are not fully in any tile
+        fallback_tasks = [
+            (
+                image_path, channel_index, y_axis, x_axis, c_axis,
+                i, int(x_col.iloc[i]), int(y_col.iloc[i]), int(w_col.iloc[i]), int(h_col.iloc[i]),
+                lower_percentile, upper_percentile,
+            )
+            for i in fallback_indices
+        ]
+        # Number of workers to use for the multiprocessing
+        n_workers_fb = min(max(1, len(fallback_tasks)), mp.cpu_count() or 8)
+        with mp.Pool(processes=n_workers_fb) as pool:
+            # Process the cells that are not fully in any tile
+            for (i, low, high) in pool.map(_process_cell_box_for_percentiles, fallback_tasks):
+                if np.isfinite(low) and np.isfinite(high):
+                    # Record the lower and upper percentiles for the cell
+                    cell_lows[i] = low
+                    cell_highs[i] = high
+
+    valid = np.isfinite(cell_lows) & np.isfinite(cell_highs)
+    if not np.any(valid):
+        raise ValueError("Could not compute any per-cell percentiles for normalization.")
+    # Compute the global minimum and maximum of the lower and upper percentiles
+    global_min = float(np.nanmin(cell_lows[valid]))
+    global_max = float(np.nanmax(cell_highs[valid]))
+    _log(f"[PhenoBIC] Normalization from bounds: min={global_min:.2f}, max={global_max:.2f} (channel {channel_index}, {np.sum(valid)} cells)")
+    return global_min, global_max
+
+
 def run_single_image(
     image_path,
     measurements_tsv_path,
@@ -249,8 +486,13 @@ def run_single_image(
     buffer_ratio,
     output_csv_path,
     model_path,
-    num_cells_batch=2000,
+    num_cells_batch=4000,
     tile_size=10000,
+    output_min_json=None,
+    output_max_json=None,
+    channel_name=None,
+    lower_percentile=10.0,
+    upper_percentile=90.0,
 ):
     """
     Run PhenoBIC phenotype inference for one image using tile-based reads.
@@ -260,6 +502,22 @@ def run_single_image(
     image_path = os.path.abspath(os.path.normpath(image_path.strip()))
     if not os.path.isfile(image_path):
         raise FileNotFoundError(f"Image file not found: {image_path!r}")
+
+    # Compute normalization min/max from image and bounds if not provided
+    if min_int is None or max_int is None:
+        _log(f"[PhenoBIC] Computing normalization percentiles from bounds (channel {channel_index})...")
+        min_int, max_int = compute_normalization_from_bounds(
+            image_path, measurements_tsv_path, channel_index,
+            lower_percentile=lower_percentile, upper_percentile=upper_percentile, tile_size=min(5000, tile_size),
+        )
+
+    # Save min/max to JSON files (merge with existing so multi-channel runs accumulate)
+    if channel_name and output_min_json:
+        _write_normalization_json(output_min_json, channel_name, min_int)
+        _log(f"[PhenoBIC] Wrote min normalization: {output_min_json}")
+    if channel_name and output_max_json:
+        _write_normalization_json(output_max_json, channel_name, max_int)
+        _log(f"[PhenoBIC] Wrote max normalization: {output_max_json}")
 
     # Load the PhenoBIC model
     _log(f"[PhenoBIC] Loading model: {os.path.basename(model_path)}")
@@ -412,15 +670,20 @@ def parse_args():
     p = argparse.ArgumentParser(description="PhenoBIC phenotype inference (tile-based, single image).")
     p.add_argument("--image", type=str, help="Path to OME-TIFF (or compatible) image")
     p.add_argument("--measurements-tsv", type=str, help="Path to measurements TSV (Object ID, Bounds_*, etc.)")
-    p.add_argument("--min", type=float, help="Lower intensity for normalization clip")
-    p.add_argument("--max", type=float, help="Upper intensity for normalization clip")
+    p.add_argument("--min", type=float, default=None, help="Lower intensity for normalization clip (default: compute from bounds)")
+    p.add_argument("--max", type=float, default=None, help="Upper intensity for normalization clip (default: compute from bounds)")
+    p.add_argument("--lower-percentile", type=float, default=10.0, help="Percentile for lower clip when computing from bounds")
+    p.add_argument("--upper-percentile", type=float, default=90.0, help="Percentile for upper clip when computing from bounds")
     p.add_argument("--channel-index", type=int, help="0-based channel index")
     p.add_argument("--buffer-ratio", type=float, default=0.1, help="Cell bounding box buffer ratio")
     p.add_argument("--output-csv", type=str, help="Output CSV path")
     p.add_argument("--model-path", type=str, help="Path to .keras PhenoBIC model")
-    p.add_argument("--num-cells-batch", type=int, default=2000, help="Batch size for cell ROI extraction per tile")
+    p.add_argument("--num-cells-batch", type=int, default=4000, help="Batch size for cell ROI extraction per tile")
     p.add_argument("--tile-size", type=int, default=10000, help="Tile size in pixels (tile_size x tile_size)")
     p.add_argument("--no-gpu", action="store_true", help="Disable GPU (CPU only)")
+    p.add_argument("--output-min-json", type=str, default=None, help="Path to JSON file to write/merge min normalization chanelwise params")
+    p.add_argument("--output-max-json", type=str, default=None, help="Path to JSON file to write/merge max normalization chanelwise params")
+    p.add_argument("--channel-name", type=str, default=None, help="Channel name for JSON key when saving normalization")
     return p.parse_args()
 
 # Main function to run the script
@@ -432,8 +695,7 @@ if __name__ == "__main__":
         print("Missing --measurements-tsv. Use --help.", file=sys.stderr)
         sys.exit(1)
     # Check if all the required arguments are provided
-    required = (args.image, args.min, args.max, args.channel_index, args.output_csv, args.model_path, args.num_cells_batch)
-    # If all the required arguments are provided, run the script
+    required = (args.image, args.channel_index, args.output_csv, args.model_path, args.num_cells_batch)
     if all(r is not None for r in required):
         # Run the script
         run_single_image(
@@ -447,6 +709,11 @@ if __name__ == "__main__":
             args.model_path,
             args.num_cells_batch,
             args.tile_size,
+            output_min_json=args.output_min_json,
+            output_max_json=args.output_max_json,
+            channel_name=args.channel_name,
+            lower_percentile=args.lower_percentile,
+            upper_percentile=args.upper_percentile,
         )
         sys.exit(0)
     print("Missing required arguments. Use --help for usage.", file=sys.stderr)

@@ -22,7 +22,7 @@ def PREPROCESS_FIELD = "whole image" // "whole image" = whole-image percentiles;
 // ═══════════════════════════════════════════════════════════════════════════
 def TILE_SIZE = 10000 // Square tile size in pixels. For maximum speed --> set as large as possible without running into memory issues.
 def NUM_CELLS_BATCH = 4000 // For maximum multiprocessing speed --> set as large as possible without running into memory issues
-def USE_GPU = false // Set false to not use GPU
+def USE_GPU = true // Set false to not use GPU
 def BUFFER_RATIO = 0.1 // Recommended to use ten percent (0.1) buffered cell bounding box of cell expression classification
 def UPPER_CLIP_PERC = 0.9 // Recommended upper clip normalization parameter = 0.9 (highest within-cell 90th percentile intensity of all cells)
 def LOWER_CLIP_PERC = 0.1// Recommended lower clip normalization parameter = 0.1 (lowest within-cell 10th percentile intensity of all cells)
@@ -53,6 +53,8 @@ def OBJECT_ID = "Object ID"
 def PHENOBIC_OUTPUT = "PhenoBIC_output"
 def MEASUREMENTS_SUBDIR = "measurements"
 def RESULTS_SUBDIR = "results"
+def MIN_NORMALIZATION_SUBDIR = "min_normalization"
+def MAX_NORMALIZATION_SUBDIR = "max_normalization"
 def LOW_PERCENTILE_SUFFIX = "_LowPercentile"
 def HIGH_PERCENTILE_SUFFIX = "_HighPercentile"
 
@@ -82,8 +84,11 @@ def phenoBICRoot = projectDir.resolve(PHENOBIC_OUTPUT)
 def measurementsDir = phenoBICRoot.resolve(MEASUREMENTS_SUBDIR)
 // Output directory for PhenoBIC results
 def resultsDir = phenoBICRoot.resolve(RESULTS_SUBDIR)
+// Directories for normalization JSON (min/max per channel)
+def minNormalizationDir = phenoBICRoot.resolve(MIN_NORMALIZATION_SUBDIR)
+def maxNormalizationDir = phenoBICRoot.resolve(MAX_NORMALIZATION_SUBDIR)
 // Creating the output root and subdirectories
-[phenoBICRoot, measurementsDir, resultsDir].each { Files.createDirectories(it) }
+[phenoBICRoot, measurementsDir, resultsDir, minNormalizationDir, maxNormalizationDir].each { Files.createDirectories(it) }
 log "Output root: ${phenoBICRoot}"
 
 // Get the imageData of the open image
@@ -182,9 +187,9 @@ if (PREPROCESS_FIELD != "whole image" && PREPROCESS_FIELD != "TMA core") {
 
 def channelResults = []
 
-// Normalize percentiles for the whole image
+// Whole-image path: percentiles computed in Python from cell bounding boxes
 if (PREPROCESS_FIELD == "whole image") {
-// (3) Generate upper & lower normalization percentiles for each channel if not already present
+// (3) Build channel list (name + index in multiplex array)
 def channelInfo = []
 for (def chName : CHANNELS) {
     def channelIndex = channelNames.indexOf(chName)
@@ -193,87 +198,15 @@ for (def chName : CHANNELS) {
         log "Channel '${chName}' not found. Available: ${channelNames}"
         return
     }
-    // Measurement names for normalization upper and lower clip parameters
-    def lowPercentileMeas = chName + LOW_PERCENTILE_SUFFIX
-    def highPercentileMeas = chName + HIGH_PERCENTILE_SUFFIX
-    // Checking whether the first detection has the normalization measurements already
-    def firstMl = detections[0].getMeasurementList()
-    boolean hasPercentiles = firstMl.containsKey(lowPercentileMeas) && firstMl.containsKey(highPercentileMeas)
-    // If not, computing the percentiles for each cell
-    def numCells = detections.size()
-    int nextUpdate = 10
-    if (!hasPercentiles) {
-        cur_cell = 0
-        log "Computing low/high percentile intensity for channel '${chName}'..."
-        // iterate each cell, get the pixels within the region
-        for (def cell : detections) {
-            def roi = cell.getROI()
-            if (roi == null) continue
-            def region = RegionRequest.createInstance(server.getPath(), 1.0, roi)
-            def img = server.readRegion(region)
-            def raster = img.getRaster()
-            int w = img.getWidth()
-            int h = img.getHeight()
-            int n = w * h
-            double[] pixels = new double[n]
-            raster.getSamples(0, 0, w, h, channelIndex, pixels)
-            // Add dummy measurements for cells with no pixels in the channel region
-            if (n == 0) {
-                cell.getMeasurementList().put(lowPercentileMeas, 0.0)
-                cell.getMeasurementList().put(highPercentileMeas, 0.0)
-                continue
-            }
-            // Sort pixels in place to compute percentile indices
-            Arrays.sort(pixels)
-            int highIdx = Math.min((int)(UPPER_CLIP_PERC * (n - 1)), n - 1)
-            int lowIdx = Math.min((int)(LOWER_CLIP_PERC * (n - 1)), n - 1)
-            double lowVal = pixels[lowIdx]
-            double highVal = pixels[highIdx]
-            // generate the lower and upper percentile measurements for the cells
-            cell.getMeasurementList().put(lowPercentileMeas, lowVal)
-            cell.getMeasurementList().put(highPercentileMeas, highVal)
-            cur_cell = cur_cell + 1
-            int percent = (cur_cell) * 100 / numCells
-            if (percent >= nextUpdate) {
-                log "${nextUpdate}% cells computed"
-                nextUpdate += 10
-            }
-        }
-        // Update object hierarchy with percentile measurements
-        imageData.getHierarchy().fireHierarchyChangedEvent(imageData.getHierarchy(), imageData.getHierarchy().getRootObject())
-        log "Low/high percentile measurements added for ${chName}."
-    }
-    
-    // Finding the minimum and maximum of the lower and upper percentiles, respecively, by iterating over all cells
-    double globalMin = Double.POSITIVE_INFINITY
-    double globalMax = Double.NEGATIVE_INFINITY
-    for (def obj : detections) {
-        def ml = obj.getMeasurementList()
-        if (ml.containsKey(lowPercentileMeas)) globalMin = Math.min(globalMin, ml.get(lowPercentileMeas))
-        if (ml.containsKey(highPercentileMeas)) globalMax = Math.max(globalMax, ml.get(highPercentileMeas))
-    }
-    if (globalMin == Double.POSITIVE_INFINITY || globalMax == Double.NEGATIVE_INFINITY) {
-        log "Missing percentile values for channel '${chName}'."
-        return
-    }
-    // Append to a growing dictionary-like map of channels and its data
-    channelInfo << [name: chName, index: channelIndex, lowPercentileMeas: lowPercentileMeas, highPercentileMeas: highPercentileMeas, globalMin: globalMin, globalMax: globalMax]
+    channelInfo << [name: chName, index: channelIndex]
 }
 
-// (4) Write measurements TSV file (bounds + low/high percentile for all channels)
+// (4) Write measurements TSV file for cell bounds
 log "Writing measurements to ${measurementsFile}..."
-// Static column headers: image ID, Cell ID & cell bounding box information
 def headerCols = ['Image', 'Object ID', BOUNDS_X, BOUNDS_Y, BOUNDS_WIDTH, BOUNDS_HEIGHT] as List
-// Dynamic column headers: lower and upper intensity persentiles for each channel
-for (def info : channelInfo) {
-    headerCols << info.lowPercentileMeas
-    headerCols << info.highPercentileMeas
-}
 // Writing the measurements TSV file. Will overwrite existing file
 measurementsFile.toFile().withPrintWriter { w ->
-    // tab-delimited file (TSV)
     w.println(headerCols.join("\t"))
-    // Loop over all detections
     for (def obj : detections) {
         // Get the all measurements in the row of the dataframe corresponding the Cell ID
         def ml = obj.getMeasurementList()
@@ -282,13 +215,8 @@ measurementsFile.toFile().withPrintWriter { w ->
         def y = ml.containsKey(BOUNDS_Y) ? ml.get(BOUNDS_Y) : 0
         def boundsW = ml.containsKey(BOUNDS_WIDTH) ? ml.get(BOUNDS_WIDTH) : 0
         def h = ml.containsKey(BOUNDS_HEIGHT) ? ml.get(BOUNDS_HEIGHT) : 0
-        def row = [name, oid, x, y, boundsW, h]
-        for (def info : channelInfo) {
-            row << (ml.containsKey(info.lowPercentileMeas) ? ml.get(info.lowPercentileMeas) : "")
-            row << (ml.containsKey(info.highPercentileMeas) ? ml.get(info.highPercentileMeas) : "")
-        }
         // Write the row as a tab-delimited string
-        w.println(row.join("\t"))
+        w.println([name, oid, x, y, boundsW, h].join("\t"))
     }
 }
 log "Measurements written."
@@ -303,12 +231,17 @@ for (def info : channelInfo) {
     def channelCsv = resultsDir.resolve("${imageName}_${safeFilename(chName)}.csv")
     def outputNorm = pathForSubprocess(channelCsv.toString())
     // CLI arguments
+    def minJsonPath = minNormalizationDir.resolve("${imageName}.json")
+    def maxJsonPath = maxNormalizationDir.resolve("${imageName}.json")
     def cmd = [pythonExe, scriptNorm,
         "--image", imageNorm,
         "--measurements-tsv", measurementsNorm,
-        "--min", String.valueOf(info.globalMin),
-        "--max", String.valueOf(info.globalMax),
         "--channel-index", String.valueOf(info.index),
+        "--channel-name", chName,
+        "--output-min-json", pathForSubprocess(minJsonPath.toString()),
+        "--output-max-json", pathForSubprocess(maxJsonPath.toString()),
+        "--lower-percentile", String.valueOf(100 * LOWER_CLIP_PERC),
+        "--upper-percentile", String.valueOf(100 * UPPER_CLIP_PERC),
         "--buffer-ratio", String.valueOf(BUFFER_RATIO),
         "--output-csv", outputNorm,
         "--model-path", modelNorm,
@@ -371,7 +304,7 @@ for (def info : channelInfo) {
 
 // Normalize percentiles for the TMA cores
 } else if (PREPROCESS_FIELD == "TMA core") {
-// (3)–(5) per TMA core: percentiles per core, write TSV per core, run Python per channel per core, merge results
+// (3)–(5) per TMA core: percentiles per core, write TSV per core, run Python per channel per core, merge results of all channels into one CSV file
     def hierarchy = imageData.getHierarchy()
     def tmaGrid = hierarchy.getTMAGrid()
     // Check if the TMA grid is found
@@ -404,7 +337,7 @@ for (def info : channelInfo) {
         }
         def coreName = safeCoreName(core)
         log "Processing TMA core ${core.getName()} (${coreDetections.size()} cells)"
-        // (3) Normalization percentiles for this core only
+        // (3) Build channel list (name + index in multiplex array)
         def channelInfoCore = []
         for (def chName : CHANNELS) {
             def channelIndex = channelNames.indexOf(chName)
@@ -412,85 +345,24 @@ for (def info : channelInfo) {
                 log "Channel '${chName}' not found. Available: ${channelNames}"
                 return
             }
-            def lowPercentileMeas = chName + LOW_PERCENTILE_SUFFIX
-            def highPercentileMeas = chName + HIGH_PERCENTILE_SUFFIX
-            def firstMl = coreDetections[0].getMeasurementList()
-            boolean hasPercentiles = firstMl.containsKey(lowPercentileMeas) && firstMl.containsKey(highPercentileMeas)
-            if (!hasPercentiles) {
-                log "Computing low/high percentile for channel '${chName}' (core ${coreName})..."
-                def numCellsCore = coreDetections.size()
-                int nextUpdate = 10
-                int coreCurCell = 0
-                for (def cell : coreDetections) {
-                    def roi = cell.getROI()
-                    if (roi == null) continue
-                    def region = RegionRequest.createInstance(server.getPath(), 1.0, roi)
-                    def img = server.readRegion(region)
-                    def raster = img.getRaster()
-                    int w = img.getWidth()
-                    int h = img.getHeight()
-                    int n = w * h
-                    double[] pixels = new double[n]
-                    raster.getSamples(0, 0, w, h, channelIndex, pixels)
-                    if (n == 0) {
-                        cell.getMeasurementList().put(lowPercentileMeas, 0.0)
-                        cell.getMeasurementList().put(highPercentileMeas, 0.0)
-                        continue
-                    }
-                    Arrays.sort(pixels)
-                    int highIdx = Math.min((int)(UPPER_CLIP_PERC * (n - 1)), n - 1)
-                    int lowIdx = Math.min((int)(LOWER_CLIP_PERC * (n - 1)), n - 1)
-                    double lowVal = pixels[lowIdx]
-                    double highVal = pixels[highIdx]
-                    cell.getMeasurementList().put(lowPercentileMeas, lowVal)
-                    cell.getMeasurementList().put(highPercentileMeas, highVal)
-                    coreCurCell++
-                    int percent = coreCurCell * 100 / numCellsCore
-                    if (percent >= nextUpdate) {
-                        log "${nextUpdate}% cells computed (core ${coreName})"
-                        nextUpdate += 10
-                    }
-                }
-                // Update object hierarchy with percentile measurements
-                imageData.getHierarchy().fireHierarchyChangedEvent(imageData.getHierarchy(), imageData.getHierarchy().getRootObject())
-            }
-            // Finding the minimum and maximum of the lower and upper percentiles, respecively, by iterating over all cells
-            double globalMin = Double.POSITIVE_INFINITY
-            double globalMax = Double.NEGATIVE_INFINITY
-            for (def obj : coreDetections) {
-                def ml = obj.getMeasurementList()
-                if (ml.containsKey(lowPercentileMeas)) globalMin = Math.min(globalMin, ml.get(lowPercentileMeas))
-                if (ml.containsKey(highPercentileMeas)) globalMax = Math.max(globalMax, ml.get(highPercentileMeas))
-            }
-            if (globalMin == Double.POSITIVE_INFINITY || globalMax == Double.NEGATIVE_INFINITY) {
-                log "Missing percentile values for channel '${chName}' in core ${coreName}."
-                return
-            }
-            // Append to a growing dictionary-like map of channels and its data
-            channelInfoCore << [name: chName, index: channelIndex, lowPercentileMeas: lowPercentileMeas, highPercentileMeas: highPercentileMeas, globalMin: globalMin, globalMax: globalMax]
+            channelInfoCore << [name: chName, index: channelIndex]
         }
         // (4) Write core-specific TSV
         def coreTsvPath = measurementsDir.resolve("${imageName}_core_${coreName}.tsv")
         def headerColsCore = ['Image', 'Object ID', BOUNDS_X, BOUNDS_Y, BOUNDS_WIDTH, BOUNDS_HEIGHT] as List
-        for (def info : channelInfoCore) {
-            headerColsCore << info.lowPercentileMeas
-            headerColsCore << info.highPercentileMeas
-        }
         coreTsvPath.toFile().withPrintWriter { w ->
             w.println(headerColsCore.join("\t"))
+            // Writing the measurements TSV file. Will overwrite existing file
             for (def obj : coreDetections) {
+                // Get the all measurements in the row of the dataframe corresponding the Cell ID
                 def ml = obj.getMeasurementList()
                 def oid = ml.containsKey(OBJECT_ID) ? String.valueOf(ml.get(OBJECT_ID).longValue()) : String.valueOf(obj.getID())
                 def x = ml.containsKey(BOUNDS_X) ? ml.get(BOUNDS_X) : 0
                 def y = ml.containsKey(BOUNDS_Y) ? ml.get(BOUNDS_Y) : 0
                 def boundsW = ml.containsKey(BOUNDS_WIDTH) ? ml.get(BOUNDS_WIDTH) : 0
                 def h = ml.containsKey(BOUNDS_HEIGHT) ? ml.get(BOUNDS_HEIGHT) : 0
-                def row = [name, oid, x, y, boundsW, h]
-                for (def info : channelInfoCore) {
-                    row << (ml.containsKey(info.lowPercentileMeas) ? ml.get(info.lowPercentileMeas) : "")
-                    row << (ml.containsKey(info.highPercentileMeas) ? ml.get(info.highPercentileMeas) : "")
-                }
-                w.println(row.join("\t"))
+                // Write the row as a tab-delimited string
+                w.println([name, oid, x, y, boundsW, h].join("\t"))
             }
         }
         def coreMeasurementsNorm = pathForSubprocess(coreTsvPath.toString())
@@ -500,20 +372,29 @@ for (def info : channelInfo) {
             def channelIdx = CHANNELS.indexOf(chName)
             def channelCsv = resultsDir.resolve("${imageName}_core_${coreName}_${safeFilename(chName)}.csv")
             def outputNorm = pathForSubprocess(channelCsv.toString())
+            def minJsonCore = minNormalizationDir.resolve("${imageName}_core_${coreName}.json")
+            def maxJsonCore = maxNormalizationDir.resolve("${imageName}_core_${coreName}.json")
+            // CLI arguments
             def cmd = [pythonExe, scriptNorm,
                 "--image", imageNorm,
                 "--measurements-tsv", coreMeasurementsNorm,
-                "--min", String.valueOf(info.globalMin),
-                "--max", String.valueOf(info.globalMax),
                 "--channel-index", String.valueOf(info.index),
+                "--channel-name", chName,
+                "--output-min-json", pathForSubprocess(minJsonCore.toString()),
+                "--output-max-json", pathForSubprocess(maxJsonCore.toString()),
+                "--lower-percentile", String.valueOf(100 * LOWER_CLIP_PERC),
+                "--upper-percentile", String.valueOf(100 * UPPER_CLIP_PERC),
                 "--buffer-ratio", String.valueOf(BUFFER_RATIO),
                 "--output-csv", outputNorm,
                 "--model-path", modelNorm,
                 "--num-cells-batch", String.valueOf(NUM_CELLS_BATCH),
                 "--tile-size", String.valueOf(TILE_SIZE)
             ]
+            // Add the --no-gpu flag if the USE_GPU flag is false
             if (!USE_GPU) cmd += "--no-gpu"
+            // Create a new process builder with the command
             def pb = new ProcessBuilder(cmd).redirectErrorStream(true)
+            // If the PYTHON_EXE flag is set, add the PYTHON_EXE to the PATH environment variable
             if (PYTHON_EXE?.trim()) {
                 def exePath = Paths.get(PYTHON_EXE.trim().replace('/', File.separator))
                 if (Files.isRegularFile(exePath)) {
@@ -525,9 +406,12 @@ for (def info : channelInfo) {
                 }
             }
             log "Starting Python: core ${coreName}, channel '${chName}'"
+            // Start the process
             def proc = pb.start()
+            // Print the output in the console/log
             proc.inputStream.newReader().eachLine { line -> println line }
             int exitCode = proc.waitFor()
+            // Error in code run
             if (exitCode != 0) {
                 log "Python exited with code ${exitCode} for core ${coreName}, channel '${chName}'"
                 return
@@ -536,17 +420,23 @@ for (def info : channelInfo) {
                 log "Output CSV not created: ${channelCsv}"
                 return
             }
+            // Create an empty map for the object ID to class mapping
             def oidToClass = [:]
+            // Read all lines of the CSV file with the PhenoBIC outputs
             def lines = channelCsv.toFile().readLines("UTF-8")
+            // Iterate over all the lines in the CSV file
             for (int i = 1; i < lines.size(); i++) {
                 def parts = lines[i].split(",", -1)
                 if (parts.length >= 2) {
                     def oid = parts[0].trim().replaceAll('^"|"$', "")
                     def cls = parts[1].trim().replaceAll('^"|"$', "")
+                    // Assign the class to the object ID
                     oidToClass[oid] = cls
                 }
             }
+            // Update the channel results with the object ID to class mapping
             channelResults[channelIdx].oidToClass.putAll(oidToClass)
+            // Delete the temporary CSV file
             try { Files.deleteIfExists(channelCsv) } catch (e) {}
         }
     }
