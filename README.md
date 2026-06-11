@@ -71,7 +71,7 @@ You will need this path for the script’s **REQUIRED CONFIG** (see below).
 ### Step 2: Install the QuPath PhenoBIC extension
 
 
-- Download the latest `qupath-extension-phenobic-*.jar` from [releases](https://github.com/Shachi-Mittal-Lab/PhenoBIC-qupath-extension/releases) and either place it in your QuPath extensions directory or drag & drop it onto the QuPath window and choose your user directory if prompted.
+- Download the latest `qupath-extension-phenobic-*v*-SNAPSHOT.jar` from [releases](https://github.com/Shachi-Mittal-Lab/PhenoBIC-qupath-extension/releases) and either place it in your QuPath extensions directory or drag & drop it onto the QuPath window and choose your user directory if prompted.
 
 Restart QuPath after installing.
 
