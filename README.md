@@ -91,7 +91,7 @@ Restart QuPath after installing.
 
     In the **REQUIRED CONFIG** block at the top, set:
    - `CHANNELS` – list of channel names (must match your image channel names in QuPath). Use **Extensions → PhenoBIC → Run PhenoBIC → Print Channel Names** to print the channel names for the current image.
-   - `MODEL_PATH` – full path to your PhenoBIC `.keras` model. Install from [here](https://github.com/your-org/qupath-extension-phenobic/releases)
+   - `MODEL_PATH` – full path to `PhenoBIC_model1.keras` model. Download from [here](https://huggingface.co/mittal-research-lab/PhenoBIC/tree/main)
    - `PYTHON_SCRIPT` – full path to `PhenoBIC_backend.py`. Download the file from [here](scripts/PhenoBIC_backend.py).
    - `PYTHON_EXE` – path to the Python executable from Step 1.
    - `PREPROCESS_FIELD`: Set to `"whole image"` or `"TMA core"` depending on whether you would like normalization to be done on a full-image basis or separately for each TMA core (if there are TMA core Objects in the QuPath Project). We recommend core-level normalization when working with TMAs.
