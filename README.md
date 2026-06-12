@@ -97,8 +97,7 @@ Restart QuPath after installing.
    - `PYTHON_SCRIPT` – full path to `PhenoBIC_backend.py`. Download the file from [here](scripts/PhenoBIC_backend.py).
    - `PYTHON_EXE` – path to the Python executable from Step 1.
    - `PREPROCESS_FIELD`: Set to `"whole image"` or `"TMA core"` depending on whether you would like normalization to be done on a full-image basis or separately for each TMA core (if there are TMA core Objects in the QuPath Project). We recommend core-level normalization when working with TMAs.
-[!WARNING]
-⚠️ **Using backslashes (`\`) in file paths will cause errors. Please only use forward slash (`/`)**
+⚠️ **WARNING: Using backslashes (`\`) in file paths will cause errors. Please only use forward slash (`/`)**
 
  - **Optional settings**  
     In the **OPTIONAL CONFIG** block, you can adjust other parameters to tailor your use of PhenoBIC.
