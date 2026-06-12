@@ -2,6 +2,8 @@
 
 This extension adds support to run **PhenoBIC** (cell phenotype inference) within QuPath. It uses a Python environment to run a tile-based deep learning inference pipeline on multiplex images, while QuPath handles project management, cell segmentation, and measurement export/import.
 
+![PhenoBIC Demo](media/PhenoBIC_GIF.gif)
+
 ---
 
 ## Citing
