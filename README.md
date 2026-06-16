@@ -11,7 +11,7 @@ This extension adds support to run **PhenoBIC** (cell phenotype inference) withi
 Please cite this extension by linking to this GitHub repository or to the release you used, and consider giving it a star ⭐️
 
 If you use this extension in your work, please also cite the following:
-
+- **PhenoBIC paper**: Sankaranarayanan, A. et al. PhenoBIC: operator-free single-cell spatial phenotyping in multiplex imaging data using deep learning of cell staining patterns. <i>bioRxiv</i> <b>2026</b>. https://www.biorxiv.org/content/10.64898/2026.06.11.731702v1
 - **QuPath**: Bankhead, P. et al. **QuPath: Open source software for digital pathology image analysis**. *Scientific Reports* (2017). <https://doi.org/10.1038/s41598-017-17204-5>
 
 ---
