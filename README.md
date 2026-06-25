@@ -18,7 +18,6 @@ If you use this extension in your work, please also cite the following:
 
 ## System Requirements
 
-- Windows Operating System
 - Supports TIFF and TIFF-derived multiplex image formats (e.g. OME-TIFF)
 - [QuPath v0.6.0 or v0.7.0](https://github.com/qupath/qupath/releases): You can try other versions but these are the versions it has been fully tested on
 
