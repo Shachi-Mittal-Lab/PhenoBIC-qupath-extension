@@ -25,6 +25,10 @@ If you use this extension in your work, please also cite the following:
 
 ## Installation
 
+### 🎥  Quick Demo:
+
+[![PhenoBIC Demo](media/installation_demo_thumbnail.jpg)](https://vimeo.com/1208538698?share=copy&fl=sv&fe=ci)
+
 ### Step 1: Install the PhenoBIC Python environment
 
 You need a Python environment with the PhenoBIC dependencies. You can use conda:
@@ -71,7 +75,6 @@ You will need this path for the script’s **REQUIRED CONFIG** (see below).
 
 ### Step 2: Install the QuPath PhenoBIC extension
 
-
 - Download the latest `qupath-extension-phenobic-*v*-SNAPSHOT.jar` from [releases](https://github.com/Shachi-Mittal-Lab/PhenoBIC-qupath-extension/releases) and either place it in your QuPath extensions directory or drag & drop it onto the QuPath window and choose your user directory if prompted.
 
 Restart QuPath after installing.
@@ -79,6 +82,10 @@ Restart QuPath after installing.
 ---
 
 ## Using the PhenoBIC extension
+
+### 🎥  Quick Demo:
+
+[![PhenoBIC Demo](media/usage_demo_thumbnail.jpg)](https://vimeo.com/1208539236?share=copy&fl=sv&fe=ci)
 
 ### Running cell phenotyping
 
